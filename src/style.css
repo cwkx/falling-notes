@@ -779,6 +779,15 @@ dialog::backdrop {
   margin:0 0 14px;
 }
 
+.setting-hint a {
+  color:var(--accent);
+  text-underline-offset:3px;
+}
+
+#reach-options {
+  padding-bottom:16px;
+}
+
 .passage-actions {
   display:flex;
   gap:8px;

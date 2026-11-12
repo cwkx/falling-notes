@@ -82,7 +82,14 @@ export class Transport {
       this.waiting = true;
     } else if (this.mode === 'listen') {
       while (this.target && this.target.time <= next && (!this.loop || this.target.time < this.loop.end)) {
-        sounded.push(...this.target.notes);
+        // Multiple voices may write the same key at one onset. Sound it once,
+        // keeping the longest written duration; later attacks still repeat it.
+        const pitches = new Map();
+        for (const note of this.target.notes) {
+          const previous = pitches.get(note.midi);
+          if (!previous || note.duration > previous.duration) pitches.set(note.midi, note);
+        }
+        sounded.push(...pitches.values());
         this.index++;
       }
     }

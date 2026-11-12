@@ -4,7 +4,8 @@ import { PianoAudio } from './audio.js';
 import { FallingRenderer, FINGER_COLORS } from './renderer.js';
 import { Transport } from './transport.js';
 import { RollGestures } from './gestures.js';
-import { fingerprintScore, applyFingerings, setFingering } from './fingering.js';
+import { fingerprintScore, applyFingerings, setFingering, applyHands, setNoteHand } from './fingering.js';
+import { analyzeReach, wideHands } from './reach.js';
 import defaultScoreUrl from '../prelude-in-c-sharp-minor-opus-3-no-2-sergei-rachmaninoff.mxl?url';
 
 const paths = {
@@ -79,6 +80,9 @@ $('#app').innerHTML = `
     <label class="setting-row"><span>Hands</span><select id="hands"><option value="both">Both hands</option><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
     <label class="setting-row"><span>Note colours</span><select id="color-mode"><option value="hands">Hands</option><option value="fingers">Fingers</option></select></label>
     <p id="fingering-status" class="setting-hint" hidden></p>
+    <p id="score-edition" class="setting-hint" hidden><a href="https://s9.imslp.org/files/imglnks/usimg/7/75/IMSLP11125-Godowsky_APS_47_Rachmaninoff-Prelude_Op.3_No.2.pdf" target="_blank" rel="noreferrer">Godowsky, 1923</a> · <a href="${defaultScoreUrl}" download="rachmaninoff-op3-no2-fingered.mxl">Download printed fingerings</a></p>
+    <label class="setting-row"><span>Reach guide</span><select id="reach"><option value="0">Off</option><option value="7">Fifth · C–G</option><option value="9">Sixth · C–A</option><option value="10">Minor seventh · C–B♭</option><option value="11">Seventh · C–B</option><option value="12">Octave · C–C</option><option value="14">Ninth · C–D</option></select></label>
+    <div id="reach-options" hidden><p class="setting-hint">Dotted notes exceed this span in one hand. Roll or redistribute. A guide to attacks, not a measure of comfort.</p><button id="next-wide" class="button">Next wide chord</button></div>
     <div class="setting-row"><label for="lookahead">Notes ahead</label><div class="number-unit"><input id="lookahead" type="number" min="0.5" max="16" step="0.25" value="8" /><span>s</span></div><input id="lookahead-range" aria-label="Notes ahead" type="range" min="0.5" max="16" step="0.25" value="8" /></div>
     <label class="setting-row"><span>Keyboard zoom</span><output id="zoom-value">1×</output><input id="keyboard-zoom" aria-label="Keyboard zoom" type="range" min="1" max="4" step="0.1" value="1" /></label>
     <div class="setting-row"><label for="practice-measure">Passage</label><select id="practice-measure" aria-label="Passage measure"></select><div class="passage-actions"><button id="jump-measure" class="button">Go to measure</button><button id="loop-measure" class="button">Loop measure</button></div></div>
@@ -90,8 +94,10 @@ $('#app').innerHTML = `
   </dialog>
   <dialog id="finger-dialog" class="finger-dialog" aria-labelledby="finger-note">
     <div class="dialog-heading"><h2 id="finger-note">Fingering</h2><button id="close-finger" class="icon-button" aria-label="Close fingering">${icon('close')}</button></div>
+    <label class="setting-row"><span>Play with</span><select id="note-hand"><option value="score">Score hand</option><option value="left">Left hand</option><option value="right">Right hand</option></select></label>
+    <p id="finger-source" class="setting-hint"></p>
     <div class="finger-choices">${[1, 2, 3, 4, 5].map(finger => `<button data-finger="${finger}" aria-label="Finger ${finger}">${finger}</button>`).join('')}</div>
-    <div class="finger-footer"><span>1 = thumb · 5 = little finger</span><button data-finger="clear" class="button">Reset</button></div>
+    <div class="finger-footer"><span>1 = thumb · 5 = little finger</span><button data-finger="clear" class="button">Reset finger</button></div>
   </dialog>
 `;
 
@@ -103,6 +109,10 @@ let lookAhead = 8;
 let colorMode = saved('color-mode', 'hands') === 'fingers' ? 'fingers' : 'hands';
 let fingeringKey = '';
 let fingeringOverrides = {};
+let handKey = '';
+let handOverrides = {};
+let reach = Number(saved('reach', '0'));
+let reachAnalysis = { wideNoteIds: new Set(), events: [] };
 let selectedNote = null;
 let loadRevision = 0;
 let fileRevision = 0;
@@ -241,18 +251,36 @@ function updateLegend() {
     if (finger) button.style.setProperty('--finger-color', FINGER_COLORS[theme][finger - 1]);
   });
   $('#fingering-status').hidden = colorMode !== 'fingers';
-  const count = score?.notes.filter(note => note.finger).length || 0;
-  $('#fingering-status').textContent = count ? `${count} notes marked. Tap a note to edit. Saved on this device.` : 'No fingerings in this score. Tap a note to mark one. Saved on this device.';
+  const count = new Set(score?.notes.filter(note => note.finger).map(note => `${note.start}:${note.midi}:${note.hand}`)).size;
+  $('#fingering-status').textContent = count ? `${count} notes marked. Tap a note to edit its finger or hand.` : 'Tap a note to set its finger or hand. Saved on this device.';
+}
+
+function updateFingerEditor() {
+  const note = selectedNote;
+  if (!note) return;
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  $('#finger-note').textContent = `${note.hand === 'left' ? 'Left' : 'Right'} · ${names[note.midi % 12]}${Math.floor(note.midi / 12) - 1}`;
+  $('#note-hand option[value="score"]').textContent = `Score · ${note.scoreHand}`;
+  $('#note-hand').value = note.hand === note.scoreHand ? 'score' : note.hand;
+  $('#finger-source').textContent = note.fingeringOrigin === 'personal' ? 'Your fingering · saved on this device'
+    : note.fingeringOrigin === 'score' ? score.fingeringSource || 'Score fingering'
+    : note.hand !== note.scoreHand ? 'Your hand assignment · choose a finger'
+    : 'No printed fingering';
+  document.querySelectorAll('[data-finger]').forEach(button => button.setAttribute('aria-pressed', Number(button.dataset.finger) === note.finger));
 }
 
 function editFingering(note) {
   if (colorMode !== 'fingers') return;
   pause();
   selectedNote = note;
-  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
-  $('#finger-note').textContent = `${note.hand === 'left' ? 'Left' : 'Right'} · ${names[note.midi % 12]}${Math.floor(note.midi / 12) - 1}`;
-  document.querySelectorAll('[data-finger]').forEach(button => button.setAttribute('aria-pressed', Number(button.dataset.finger) === note.finger));
+  updateFingerEditor();
   $('#finger-dialog').showModal();
+}
+
+function updateReach() {
+  reachAnalysis = score ? analyzeReach(score, reach) : { wideNoteIds: new Set(), events: [] };
+  $('#reach-options').hidden = !reach;
+  $('#next-wide').disabled = !reachAnalysis.events.length;
 }
 
 function setLoop(start, end) {
@@ -313,6 +341,10 @@ function updateControls() {
   else if (transport.playing && transport.loopRest > 0) status = `Again in ${transport.loopRest.toFixed(1)}s`;
   else if (transport.playing) status = transport.mode === 'listen' ? 'Playing' : transport.waiting ? 'Your turn' : 'Listening';
   else if (transport.position > 0) status = 'Paused';
+  if (transport.playing && transport.waiting && reach) {
+    const hands = wideHands(transport.target?.notes || [], reach);
+    if (hands.length) status = `Wide ${hands.length === 2 ? 'chord' : hands[0] + ' chord'} · play in steps`;
+  }
   if ($('#status-text').textContent !== status) $('#status-text').textContent = status;
   $('#status-dot').classList.toggle('live', transport.playing);
   $('#status-dot').classList.toggle('waiting', transport.waiting && transport.playing);
@@ -329,10 +361,17 @@ async function openScore(input, filename, isDefault = false) {
     const loaded = await loadScore(input, filename);
     if (revision !== loadRevision) return;
     score = loaded;
+    if (isDefault) score.fingeringSource = 'Godowsky · 1923';
+    $('#score-edition').hidden = !isDefault;
     fingeringKey = `fingering:${fingerprintScore(score)}`;
+    handKey = `hands:${fingerprintScore(score)}`;
     try { fingeringOverrides = JSON.parse(saved(fingeringKey, '{}')); } catch { fingeringOverrides = {}; }
     if (!fingeringOverrides || Array.isArray(fingeringOverrides) || typeof fingeringOverrides !== 'object') fingeringOverrides = {};
+    try { handOverrides = JSON.parse(saved(handKey, '{}')); } catch { handOverrides = {}; }
+    if (!handOverrides || Array.isArray(handOverrides) || typeof handOverrides !== 'object') handOverrides = {};
+    applyHands(score, handOverrides);
     applyFingerings(score, fingeringOverrides);
+    updateReach();
     transport = new Transport(score);
     transport.loopGap = Number($('#loop-gap').value);
     transport.setHand($('#hands').value);
@@ -447,6 +486,19 @@ $('#lookahead-range').addEventListener('input', event => setLookAhead(event.targ
 $('#keyboard-zoom').addEventListener('input', event => { renderer.setZoom(Number(event.target.value)); updateView(); });
 $('#color-mode').value = colorMode;
 $('#color-mode').addEventListener('change', event => { colorMode = event.target.value; save('color-mode', colorMode); updateLegend(); });
+$('#reach').value = String(reach);
+if (!$('#reach').value) { reach = 0; $('#reach').value = '0'; }
+$('#reach').addEventListener('change', event => { reach = Number(event.target.value); save('reach', reach); updateReach(); });
+$('#next-wide').addEventListener('click', () => {
+  if (!transport) return;
+  const candidates = reachAnalysis.events.filter(event => transport.hand === 'both' || event.hands.includes(transport.hand));
+  const next = candidates.find(event => event.time > transport.position + .02) || candidates[0];
+  if (!next) { toast('No chords above this reach for the selected hand.'); return; }
+  pause();
+  clearLoop();
+  seek(next.time);
+  $('#settings-dialog').close();
+});
 $('#view-pan').addEventListener('input', event => {
   const desiredPan = -Number(event.target.value) / 100 * renderer.width * (renderer.zoom - 1);
   renderer.panBy(desiredPan - renderer.pan);
@@ -472,6 +524,18 @@ $('#loop-measure').addEventListener('click', () => {
 });
 $('#close-finger').addEventListener('click', () => $('#finger-dialog').close());
 $('#finger-dialog').addEventListener('close', () => { selectedNote = null; });
+$('#note-hand').addEventListener('change', event => {
+  if (!selectedNote) return;
+  setNoteHand(score, selectedNote.id, event.target.value === 'score' ? null : event.target.value, handOverrides, fingeringOverrides);
+  save(handKey, JSON.stringify(handOverrides));
+  save(fingeringKey, JSON.stringify(fingeringOverrides));
+  transport.rebuildEvents();
+  audio.reset();
+  active.clear();
+  updateReach();
+  updateLegend();
+  updateFingerEditor();
+});
 document.querySelectorAll('[data-finger]').forEach(button => button.addEventListener('click', () => {
   if (!selectedNote) return;
   setFingering(score, selectedNote.id, button.dataset.finger === 'clear' ? null : Number(button.dataset.finger), fingeringOverrides);
@@ -602,7 +666,7 @@ function frame(now) {
     if (wasPlaying && !transport.playing) pause();
     for (const [midi, until] of active) if (now > until) active.delete(midi);
     if (now - lastRender > (transport.playing ? 12 : 30)) {
-      renderer.render({ time: transport.position, lookAhead, playing: transport.playing, waiting: transport.waiting, expected: transport.expected, matched: transport.matched, active: new Set(active.keys()), theme, now, hand: transport.hand, colorMode, selectedNoteId: selectedNote?.id });
+      renderer.render({ time: transport.position, lookAhead, playing: transport.playing, waiting: transport.waiting, expected: transport.expected, matched: transport.matched, active: new Set(active.keys()), theme, now, hand: transport.hand, colorMode, selectedNoteId: selectedNote?.id, wideNoteIds: reachAnalysis.wideNoteIds });
       lastRender = now;
     }
     if (now - lastControlUpdate > 120) { updateControls(); lastControlUpdate = now; }

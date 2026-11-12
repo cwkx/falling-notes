@@ -28,6 +28,48 @@ test('wait mode stops exactly at a chord until every expected pitch is played', 
   assert.ok(t.position > 0);
 });
 
+test('a rolled chord remembers released notes through long pauses between attacks', () => {
+  const chord = [48, 52, 60].map(midi => ({ midi, start: 0, duration: .2, hand: 'right' }));
+  const t = new Transport({ notes: chord, events: [{ time: 0, notes: chord }], duration: 1 });
+  t.seek(0);
+  t.playing = true;
+  t.step(.01);
+  assert.deepEqual(t.accept([48]), [48]);
+  for (let i = 0; i < 200; i++) {
+    t.accept([]);
+    t.step(.1);
+  }
+  assert.equal(t.position, 0);
+  assert.equal(t.waiting, true);
+  assert.deepEqual([...t.matched], [48]);
+  assert.deepEqual(t.accept([52]), [52]);
+  for (let i = 0; i < 200; i++) {
+    t.accept([]);
+    t.step(.1);
+  }
+  assert.deepEqual([...t.matched], [48, 52]);
+  assert.deepEqual(t.accept([60]), [60]);
+  assert.equal(t.waiting, false);
+  assert.equal(t.index, 1);
+});
+
+test('later attacks do not require earlier sustained notes to remain held', () => {
+  const held = { midi: 36, start: 0, duration: 4, hand: 'left' };
+  const next = { midi: 64, start: .1, duration: 1, hand: 'right' };
+  const t = new Transport({ notes: [held, next], events: [
+    { time: 0, notes: [held] }, { time: .1, notes: [next] },
+  ], duration: 4 });
+  t.seek(0);
+  t.playing = true;
+  t.step(.01);
+  t.accept([36]);
+  t.step(.1);
+  assert.deepEqual([...t.expected], [64]);
+  assert.deepEqual(t.accept([64]), [64]);
+  assert.equal(t.index, 2);
+  assert.equal(t.waiting, false);
+});
+
 test('seeking clears matches and produces a new recognition token', () => {
   const t = new Transport(score);
   t.playing = true;
@@ -51,6 +93,28 @@ test('listening plays every crossed note once and respects speed', () => {
   assert.equal(t.position, 0);
   assert.equal(t.step(.1).length, 0);
   assert.equal(t.position, .05);
+});
+
+test('listening merges duplicate voices at an onset using the longest duration', () => {
+  const short = { midi: 60, start: 0, duration: .1, hand: 'right' };
+  const long = { midi: 60, start: 0, duration: 1, hand: 'left' };
+  const other = { midi: 64, start: 0, duration: .2, hand: 'right' };
+  const repeated = { midi: 60, start: .05, duration: .1, hand: 'right' };
+  const notes = [short, long, other, repeated];
+  const score = { notes, events: [
+    { time: 0, notes: [short, long, other] }, { time: .05, notes: [repeated] },
+  ], duration: 1 };
+  const before = structuredClone(score);
+  const t = new Transport(score);
+  t.setMode('listen');
+  t.seek(0);
+  t.playing = true;
+  assert.deepEqual(t.step(.1), [long, other, repeated]);
+  assert.deepEqual(t.step(.1), []);
+  assert.deepEqual(score, before);
+  t.setHand('right');
+  t.seek(0);
+  assert.deepEqual(t.step(.1), [short, other, repeated]);
 });
 
 test('single hand practice excludes other-hand notes and empty events', () => {

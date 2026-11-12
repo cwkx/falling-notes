@@ -42,7 +42,8 @@ test('parses the supplied Rachmaninoff archive, including its broken engraving t
   }
   assert.ok(result.notes.some((note) => note.measure === 45 && note.hand === 'left'));
   assert.ok(result.notes.some((note) => note.measure === 45 && note.hand === 'right'));
-  assert.ok(result.notes.every(note => note.finger === null && note.fingering === '' && note.fingerings.length === 0));
+  assert.ok(result.notes.some(note => note.measure === 14 && note.midi === 64 && note.finger === 5));
+  assert.ok(result.notes.some(note => note.finger === null && note.fingering === ''));
 });
 
 test('reads primary, alternate, and substitution fingerings without inventing ambiguous fingers', async () => {

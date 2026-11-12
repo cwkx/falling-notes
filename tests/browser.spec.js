@@ -410,6 +410,55 @@ test('imported finger colours can be edited, remembered, and restored', async ({
   await expect(page.locator('#finger-dialog [data-finger="1"]')).toHaveAttribute('aria-pressed', 'true');
 });
 
+test('hand redistribution is saved and resets to the printed fingering', async ({ page }, testInfo) => {
+  const tapNote = point => testInfo.project.use.hasTouch
+    ? page.touchscreen.tap(point.x, point.y)
+    : page.mouse.click(point.x, point.y);
+  await importFingerFixture(page);
+  await range(page, '#timeline', 0);
+  await page.getByRole('button', { name: 'Practice settings', exact: true }).click();
+  await page.locator('#color-mode').selectOption('fingers');
+  await number(page, '#lookahead', 1);
+  await page.getByRole('button', { name: 'Close settings' }).click();
+  await expect.poll(() => visibleNote(page)).not.toBeNull();
+  await tapNote(await visibleNote(page));
+  await page.locator('#note-hand').selectOption('left');
+  await expect(page.locator('#finger-note')).toHaveText('Left · C4');
+  await expect(page.locator('#finger-source')).toContainText('choose a finger');
+  await expect(page.locator('#finger-dialog [data-finger="1"]')).toHaveAttribute('aria-pressed', 'false');
+  await page.locator('#finger-dialog [data-finger="5"]').click();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
+  await importFingerFixture(page);
+  await range(page, '#timeline', 0);
+  await expect.poll(() => visibleNote(page)).not.toBeNull();
+  await tapNote(await visibleNote(page));
+  await expect(page.locator('#note-hand')).toHaveValue('left');
+  await expect(page.locator('#finger-dialog [data-finger="5"]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#note-hand').selectOption('score');
+  await expect(page.locator('#finger-note')).toHaveText('Right · C4');
+  await expect(page.locator('#finger-source')).toHaveText('Score fingering');
+  await expect(page.locator('#finger-dialog [data-finger="1"]')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('reach guide finds a wide attack and offers time to play it in steps', async ({ page }) => {
+  const fixture = fingerFixture.replace('</note></measure>', '</note><note><chord/><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration></note></measure>');
+  await page.locator('#file').setInputFiles({ name: 'reach.musicxml', mimeType: 'application/xml', buffer: Buffer.from(fixture) });
+  await expect(page.locator('#piece-title')).toHaveText('Finger practice');
+  await page.getByRole('button', { name: 'Practice settings', exact: true }).click();
+  await expect(page.locator('#reach')).toHaveValue('0');
+  await page.locator('#reach').selectOption('9');
+  await expect(page.locator('#reach-options')).toBeVisible();
+  await page.locator('#next-wide').click();
+  await expect.poll(() => position(page)).toBeCloseTo(0, 2);
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(page.locator('#status-text')).toHaveText('Wide right chord · play in steps');
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: 'Practice settings', exact: true }).click();
+  await expect(page.locator('#reach')).toHaveValue('9');
+});
+
 test('a selected measure loops with a pause between repetitions', async ({ page }) => {
   await importFingerFixture(page);
   await page.getByRole('button', { name: 'Practice settings', exact: true }).click();

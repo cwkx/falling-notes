@@ -242,7 +242,7 @@ export class FallingRenderer {
     const {
       time = 0, lookAhead = 7, waiting = false, expected = EMPTY,
       matched = EMPTY, active = EMPTY, theme = 'dark',
-      now = performance.now(), hand = 'both', colorMode = 'hands', selectedNoteId = null,
+      now = performance.now(), hand = 'both', colorMode = 'hands', selectedNoteId = null, wideNoteIds = EMPTY,
     } = frame;
     const ctx = this.ctx;
     const colors = THEMES[theme] || THEMES.dark;
@@ -311,6 +311,14 @@ export class FallingRenderer {
       ctx.globalAlpha = fade * .46;
       ctx.lineWidth = 1;
       ctx.stroke();
+      if (wideNoteIds.has(note.id)) {
+        ctx.globalAlpha = fade;
+        ctx.strokeStyle = theme === 'light' ? '#81540c' : '#ffd082';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       if (note.id === selectedNoteId) {
         ctx.globalAlpha = 1;
         ctx.strokeStyle = theme === 'light' ? '#20372c' : '#ffffff';
