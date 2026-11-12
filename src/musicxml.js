@@ -99,6 +99,27 @@ function metronomeTempo(direction) {
   return bpm > 0 ? bpm : 0;
 }
 
+function noteFingerings(note) {
+  return children(note, 'notations').flatMap(notations =>
+    children(notations, 'technical').flatMap(technical =>
+      children(technical, 'fingering').map(fingering => ({
+        text: fingering.textContent.trim().replace(/\s+/g, ' '),
+        alternate: fingering.getAttribute('alternate') === 'yes',
+        substitution: fingering.getAttribute('substitution') === 'yes',
+      })),
+    ),
+  ).filter(fingering => fingering.text);
+}
+
+function primaryFinger(fingerings) {
+  const primary = fingerings.filter(fingering => !fingering.alternate && !fingering.substitution);
+  return primary.length === 1 && /^[1-5]$/.test(primary[0].text) ? Number(primary[0].text) : null;
+}
+
+function fingeringLabel(fingerings) {
+  return fingerings.map((fingering, index) => `${index ? fingering.substitution ? '–' : '/' : ''}${fingering.text}`).join('');
+}
+
 function parsePart(part, partIndex, partCount) {
   let divisions = 1;
   let nominalDuration = 4;
@@ -183,11 +204,13 @@ function parsePart(part, partIndex, partCount) {
           const midi = (numeric(pitch, 'octave', 4) + 1) * 12 + STEPS[step] + numeric(pitch, 'alter') + (staffTransposes.get(staff) ?? transpose);
           if (!Number.isFinite(midi) || midi < 0 || midi > 127 || duration <= 0) break;
           const ties = [...children(element, 'tie'), ...descendants(element, 'tied')].map((tie) => tie.getAttribute('type'));
+          const fingerings = noteFingerings(element);
           notes.push({
             midi: Math.round(midi), beat: start, beats: duration, staff,
             voice: value(element, 'voice', '1'), part: part.id || String(partIndex),
             tieStart: ties.includes('start'), tieStop: ties.includes('stop'),
             grace: isGrace, measure: number,
+            fingerings, finger: primaryFinger(fingerings),
           });
           break;
         }
@@ -300,7 +323,7 @@ export async function loadScore(input, filename = '') {
       if (!source) return;
       source.notes.forEach((note) => {
         if (rawNotes.length >= MAX_NOTES) throw new Error('This score has too many notes.');
-        rawNotes.push({ ...note, beat: note.beat + beat });
+        rawNotes.push({ ...note, fingerings: note.fingerings.map(fingering => ({ ...fingering })), beat: note.beat + beat });
       });
       source.tempos.forEach((tempo) => rawTempos.push({ ...tempo, beat: tempo.beat + beat }));
     });
@@ -315,7 +338,10 @@ export async function loadScore(input, filename = '') {
   for (const note of rawNotes) {
     const key = `${note.part}:${note.voice}:${note.staff}:${note.midi}`;
     const previous = openTies.get(key);
-    if (note.tieStop && previous && Math.abs(previous.beat + previous.beats - note.beat) < EPSILON) previous.beats += note.beats;
+    if (note.tieStop && previous && Math.abs(previous.beat + previous.beats - note.beat) < EPSILON) {
+      previous.beats += note.beats;
+      previous.fingerings.push(...note.fingerings);
+    }
     else merged.push(note);
     if (note.tieStart) openTies.set(key, note.tieStop && previous && Math.abs(previous.beat + previous.beats - note.beat - note.beats) < EPSILON ? previous : note);
     else openTies.delete(key);
@@ -325,6 +351,7 @@ export async function loadScore(input, filename = '') {
     id, midi: note.midi, start: toSeconds(note.beat),
     duration: Math.max(0.025, toSeconds(note.beat + note.beats) - toSeconds(note.beat)),
     hand: note.hand, measure: note.measure,
+    finger: note.finger, fingering: fingeringLabel(note.fingerings), fingerings: note.fingerings,
   }));
   const events = [];
   for (const note of notes) {

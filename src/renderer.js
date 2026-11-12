@@ -2,6 +2,11 @@ const BLACK = new Set([1, 3, 6, 8, 10]);
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const EMPTY = new Set();
 
+export const FINGER_COLORS = {
+  dark: ['#f0bc6b', '#76c8eb', '#ed91b8', '#a7da83', '#c2a1ed'],
+  light: ['#aa691a', '#247ba4', '#b74677', '#507e29', '#7950ad'],
+};
+
 const THEMES = {
   dark: {
     background: '#101416', lane: 'rgba(221, 236, 228, .035)',
@@ -66,11 +71,14 @@ export class FallingRenderer {
     this.maxMidi = 83;
     this.width = 1;
     this.height = 1;
+    this.zoom = 1;
+    this.pan = 0;
     this.keys = [];
     this.keyByMidi = new Map();
     this.flashes = new Map();
     this.particles = [];
     this.lastFrame = null;
+    this.reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
     this.resize = this.resize.bind(this);
     this.observer = new ResizeObserver(this.resize);
     this.observer.observe(canvas);
@@ -93,13 +101,16 @@ export class FallingRenderer {
     }
     this.flashes.clear();
     this.particles.length = 0;
-    this.layoutKeys();
+    this.resetView();
   }
 
   resize() {
     const bounds = this.canvas.getBoundingClientRect();
+    const center = (this.width / 2 - this.pan) / (this.width * this.zoom);
     this.width = Math.max(1, bounds.width);
     this.height = Math.max(1, bounds.height);
+    this.pan = this.width / 2 - center * this.width * this.zoom;
+    this.clampPan();
     const ratio = Math.min(2, window.devicePixelRatio || 1);
     const pixelWidth = Math.round(this.width * ratio);
     const pixelHeight = Math.round(this.height * ratio);
@@ -116,12 +127,39 @@ export class FallingRenderer {
     if (this.lastFrame) this.render(this.lastFrame);
   }
 
+  clampPan() {
+    this.pan = clamp(this.pan, this.width * (1 - this.zoom), 0);
+  }
+
+  setZoom(value, anchorX = this.width / 2) {
+    const next = clamp(Number(value) || 1, 1, 4);
+    const anchor = clamp(anchorX, 0, this.width);
+    const position = (anchor - this.pan) / this.zoom;
+    this.pan = anchor - position * next;
+    this.zoom = next;
+    this.clampPan();
+    this.layoutKeys();
+  }
+
+  panBy(deltaX) {
+    if (!Number.isFinite(deltaX)) return;
+    this.pan += deltaX;
+    this.clampPan();
+    this.layoutKeys();
+  }
+
+  resetView() {
+    this.zoom = 1;
+    this.pan = 0;
+    this.layoutKeys();
+  }
+
   layoutKeys() {
     const whiteNotes = [];
     for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
       if (!BLACK.has(midi % 12)) whiteNotes.push(midi);
     }
-    const whiteWidth = this.width / Math.max(1, whiteNotes.length);
+    const whiteWidth = this.width * this.zoom / Math.max(1, whiteNotes.length);
     this.whiteWidth = whiteWidth;
     this.keys = [];
     this.keyByMidi.clear();
@@ -129,7 +167,7 @@ export class FallingRenderer {
     for (let midi = this.minMidi; midi <= this.maxMidi; midi++) {
       const black = BLACK.has(midi % 12);
       const width = black ? whiteWidth * .62 : whiteWidth;
-      const x = black ? whiteIndex * whiteWidth - width / 2 : whiteIndex++ * whiteWidth;
+      const x = this.pan + (black ? whiteIndex * whiteWidth - width / 2 : whiteIndex++ * whiteWidth);
       const key = { midi, black, x, width, center: x + width / 2 };
       this.keys.push(key);
       this.keyByMidi.set(midi, key);
@@ -141,7 +179,7 @@ export class FallingRenderer {
     if (!key) return;
     const now = performance.now();
     this.flashes.set(midi, now);
-    if (this.particles.length > 200) return;
+    if (this.reducedMotion?.matches || this.particles.length > 200) return;
     for (let i = 0; i < 7; i++) {
       this.particles.push({
         midi, born: now, x: (Math.random() - .5) * key.width,
@@ -163,12 +201,48 @@ export class FallingRenderer {
     return this.keys.find(key => !key.black && x >= key.x && x < key.x + key.width)?.midi ?? null;
   }
 
+  noteBounds(note, frame = this.lastFrame) {
+    if (!frame || (frame.hand && frame.hand !== 'both' && frame.hand !== note.hand)) return null;
+    const time = frame.time ?? 0;
+    const lookAhead = Math.max(.5, frame.lookAhead ?? 7);
+    if (note.start > time + lookAhead + .1 || note.start + note.duration < time - .04) return null;
+    const key = this.keyByMidi.get(note.midi);
+    if (!key) return null;
+    const pixelsPerSecond = Math.max(1, this.strikeY / lookAhead);
+    const bottom = this.strikeY - (note.start - time) * pixelsPerSecond;
+    const hasLabel = frame.colorMode === 'fingers' && (note.fingering || note.finger);
+    const top = bottom - Math.max(hasLabel ? 17 : 9, note.duration * pixelsPerSecond - 3);
+    const x = key.x + Math.min(2, key.width * .13);
+    const width = Math.max(2, key.width - Math.min(4, key.width * .26));
+    const y = Math.max(-8, top);
+    const height = Math.max(3, bottom - y);
+    if (x + width <= 0 || x >= this.width || bottom <= 0 || y >= this.strikeY) return null;
+    return { x, y, width, height, bottom, key };
+  }
+
+  noteFromPoint(clientX, clientY) {
+    if (!this.lastFrame) return null;
+    const bounds = this.canvas.getBoundingClientRect();
+    const x = (clientX - bounds.left) * this.width / bounds.width;
+    const y = (clientY - bounds.top) * this.height / bounds.height;
+    if (y < 0 || y >= this.strikeY || x < 0 || x >= this.width) return null;
+    // Later bars are drawn on top if an unusually short note needs a label badge.
+    const end = firstAtOrAfter(this.notes, (this.lastFrame.time ?? 0) + (this.lastFrame.lookAhead ?? 7) + .1);
+    for (let index = Math.min(end, this.notes.length - 1); index >= 0; index--) {
+      const note = this.notes[index];
+      if (note.start < (this.lastFrame.time ?? 0) - this.maxDuration - .1) break;
+      const rect = this.noteBounds(note);
+      if (rect && x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height) return note;
+    }
+    return null;
+  }
+
   render(frame) {
     this.lastFrame = frame;
     const {
       time = 0, lookAhead = 7, waiting = false, expected = EMPTY,
       matched = EMPTY, active = EMPTY, theme = 'dark',
-      now = performance.now(), hand = 'both',
+      now = performance.now(), hand = 'both', colorMode = 'hands', selectedNoteId = null,
     } = frame;
     const ctx = this.ctx;
     const colors = THEMES[theme] || THEMES.dark;
@@ -180,7 +254,7 @@ export class FallingRenderer {
 
     // Quiet vertical lanes keep dense chords aligned without competing with notes.
     for (const key of this.keys) {
-      if (key.black) continue;
+      if (key.black || key.x < 0 || key.x > width) continue;
       ctx.fillStyle = key.midi % 12 === 0 ? colors.octave : colors.lane;
       ctx.fillRect(Math.round(key.x), 0, 1, strikeY);
     }
@@ -209,23 +283,21 @@ export class FallingRenderer {
       if (note.start > time + lookAhead + .1) break;
       if (note.start + note.duration < time - .04) continue;
       if (hand !== 'both' && note.hand !== hand) continue;
-      const key = this.keyByMidi.get(note.midi);
-      if (!key) continue;
+      const bounds = this.noteBounds(note, frame);
+      if (!bounds) continue;
+      const { key, bottom, x, y, width: noteWidth, height: noteHeight } = bounds;
       const isLeft = note.hand === 'left';
-      const color = isLeft ? colors.left : colors.right;
+      const knownFinger = Number.isInteger(note.finger) && note.finger >= 1 && note.finger <= 5;
+      const fingerColor = colorMode === 'fingers' && knownFinger ? FINGER_COLORS[theme === 'light' ? 'light' : 'dark'][note.finger - 1] : null;
+      const color = fingerColor || (isLeft ? colors.left : colors.right);
       const nearLine = Math.abs(note.start - time) < .085;
       const target = nearLine && expected.has(note.midi);
       const complete = target && matched.has(note.midi);
-      const bottom = strikeY - (note.start - time) * pixelsPerSecond;
-      const top = bottom - Math.max(9, note.duration * pixelsPerSecond - 3);
-      const x = key.x + Math.min(2, key.width * .13);
-      const noteWidth = Math.max(2, key.width - Math.min(4, key.width * .26));
-      const y = Math.max(-8, top);
-      const noteHeight = Math.max(3, bottom - y);
       const fade = clamp((bottom + 16) / 60, .12, 1);
-      ctx.globalAlpha = fade * (complete ? .55 : 1);
+      const unknownFinger = colorMode === 'fingers' && !note.fingering && !knownFinger;
+      ctx.globalAlpha = fade * (complete ? .55 : unknownFinger ? .58 : 1);
       const fill = ctx.createLinearGradient(0, y, 0, Math.max(y + 1, bottom));
-      fill.addColorStop(0, isLeft ? colors.leftDark : colors.rightDark);
+      fill.addColorStop(0, fingerColor ? `${fingerColor}99` : isLeft ? colors.leftDark : colors.rightDark);
       fill.addColorStop(1, color);
       ctx.fillStyle = fill;
       if (target && waiting) {
@@ -239,16 +311,31 @@ export class FallingRenderer {
       ctx.globalAlpha = fade * .46;
       ctx.lineWidth = 1;
       ctx.stroke();
+      if (note.id === selectedNoteId) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = theme === 'light' ? '#20372c' : '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
       ctx.globalAlpha = fade * .8;
       ctx.fillStyle = color;
       ctx.fillRect(x + 1, bottom - 3, Math.max(1, noteWidth - 2), 2);
-      if (noteWidth >= 19 && noteHeight >= 23 && bottom > 25) {
+      const fingerLabel = colorMode === 'fingers' && (note.fingering || (knownFinger ? String(note.finger) : ''));
+      const label = fingerLabel || NOTE_NAMES[note.midi % 12];
+      const labelWidth = fingerLabel ? 11 : 19;
+      if (label && noteWidth >= labelWidth && noteHeight >= (fingerLabel ? 14 : 23) && bottom > 12) {
         ctx.globalAlpha = fade * .85;
-        ctx.fillStyle = theme === 'light' ? '#ffffff' : '#182b24';
+        ctx.fillStyle = theme === 'light' ? '#ffffff' : '#14251e';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
-        ctx.font = `500 ${Math.min(11, noteWidth * .39)}px system-ui, sans-serif`;
-        ctx.fillText(NOTE_NAMES[note.midi % 12], key.center, Math.min(strikeY - 6, bottom - 7));
+        const fontSize = fingerLabel ? clamp(noteWidth / Math.max(1.4, label.length * .65), 8, 13) : Math.min(11, noteWidth * .39);
+        ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+        const labelY = Math.min(strikeY - 4, bottom - (fingerLabel ? 3 : 7));
+        ctx.fillText(label, key.center, labelY, noteWidth - 2);
+        if (colorMode === 'fingers' && noteWidth >= 27 && noteHeight >= 34) {
+          ctx.font = '500 8px system-ui, sans-serif';
+          ctx.fillText(isLeft ? 'L' : 'R', key.center, labelY - fontSize - 3);
+        }
       }
     }
     ctx.globalAlpha = 1;
@@ -272,7 +359,7 @@ export class FallingRenderer {
       ctx.fillRect(key.center - radius, strikeY - radius, radius * 2, radius * 2);
     }
 
-    this.particles = this.particles.filter(particle => now - particle.born < 650);
+    this.particles = this.reducedMotion?.matches ? [] : this.particles.filter(particle => now - particle.born < 650);
     ctx.fillStyle = colors.right;
     for (const particle of this.particles) {
       const age = (now - particle.born) / 1000;
@@ -293,6 +380,36 @@ export class FallingRenderer {
     ctx.globalAlpha = waiting ? .9 : .4;
     ctx.fillRect(0, strikeY, width, 1.5);
     ctx.globalAlpha = 1;
+    if (this.zoom > 1 && waiting) this.drawOffscreenTargets(expected, matched, colors);
+  }
+
+  drawOffscreenTargets(expected, matched, colors) {
+    const counts = { left: 0, right: 0 };
+    for (const midi of expected) {
+      if (matched.has(midi)) continue;
+      const key = this.keyByMidi.get(midi);
+      if (!key) continue;
+      if (key.center < 0) counts.left++;
+      else if (key.center > this.width) counts.right++;
+    }
+    const ctx = this.ctx;
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    for (const side of ['left', 'right']) {
+      if (!counts[side]) continue;
+      const left = side === 'left';
+      const x = left ? 5 : this.width - 43;
+      const y = Math.max(6, this.strikeY - 39);
+      ctx.fillStyle = colors.background;
+      roundRect(ctx, x, y, 38, 28, 6);
+      ctx.fill();
+      ctx.strokeStyle = colors.line;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = colors.line;
+      ctx.textAlign = 'center';
+      ctx.fillText(left ? `‹ ${counts.left}` : `${counts.right} ›`, x + 19, y + 14);
+    }
   }
 
   drawKeyboard({ colors, theme, expected, matched, active, waiting, now }) {
@@ -308,7 +425,7 @@ export class FallingRenderer {
     blacks.addColorStop(1, colors.blackEdge);
     for (const black of [false, true]) {
       for (const key of this.keys) {
-        if (key.black !== black) continue;
+        if (key.black !== black || key.x + key.width <= 0 || key.x >= this.width) continue;
         const keyHeight = black ? keyboardHeight * .63 : keyboardHeight;
         const gap = black ? Math.min(1, key.width * .05) : Math.min(1.3, key.width * .08);
         ctx.fillStyle = black ? blacks : whites;
@@ -326,12 +443,14 @@ export class FallingRenderer {
           ctx.fill();
           ctx.restore();
         }
-        if (!black && key.midi % 12 === 0 && key.width >= 8) {
+        const showName = !black && (key.midi % 12 === 0 || key.width >= 18) || black && key.width >= 13;
+        if (showName && key.width >= 8) {
           ctx.font = `500 ${clamp(key.width * .35, 7, 10)}px system-ui, sans-serif`;
-          ctx.fillStyle = colors.label;
+          ctx.fillStyle = black ? colors.blackLabel : colors.label;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(`C${Math.floor(key.midi / 12) - 1}`, key.center, this.height - 9);
+          const label = key.midi % 12 === 0 ? `C${Math.floor(key.midi / 12) - 1}` : NOTE_NAMES[key.midi % 12];
+          ctx.fillText(label, key.center, strikeY + keyHeight - 9);
         }
         if (target && key.width > 9) {
           ctx.fillStyle = black ? (theme === 'light' ? '#d8efdf' : '#d8efdf') : '#528064';

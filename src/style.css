@@ -390,6 +390,48 @@ svg {
   opacity:1;
 }
 
+.view-tools {
+  position:absolute;
+  top:9px;
+  right:9px;
+  display:flex;
+  align-items:center;
+  gap:2px;
+  padding:3px;
+  background:color-mix(in srgb,var(--bg) 92%,transparent);
+  border:1px solid var(--line);
+  border-radius:8px;
+}
+
+.view-tools .icon-button {
+  width:30px;
+  height:30px;
+}
+
+.view-tools svg {
+  width:15px;
+  height:15px;
+}
+
+#reset-view {
+  min-width:74px;
+  height:30px;
+  padding:0 6px;
+  border-radius:5px;
+  color:var(--muted);
+  font-size:11px;
+  font-variant-numeric:tabular-nums;
+}
+
+#view-pan {
+  width:88px;
+  margin:0 7px;
+}
+
+#view-pan[hidden] {
+  display:none;
+}
+
 .drop-overlay {
   position:absolute;
   inset:0;
@@ -427,6 +469,9 @@ svg {
   color:var(--muted);
   font-size:11px;
   min-width:77px;
+  text-align:left;
+  padding:4px 0;
+  border-radius:4px;
 }
 
 .timeline-wrap {
@@ -725,6 +770,66 @@ dialog::backdrop {
   color:var(--muted);
   padding-top:14px;
   border-top:1px solid var(--line);
+}
+
+.setting-hint {
+  font-size:11px;
+  color:var(--muted);
+  line-height:1.6;
+  margin:0 0 14px;
+}
+
+.passage-actions {
+  display:flex;
+  gap:8px;
+  width:100%;
+}
+
+.passage-actions button {
+  flex:1;
+}
+
+.finger-dialog {
+  width:340px;
+}
+
+.finger-dialog .dialog-heading {
+  margin-bottom:12px;
+}
+
+.finger-choices {
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.finger-choices button {
+  height:44px;
+  flex:1;
+  border-radius:9px;
+  background:var(--finger-color);
+  color:#17251e;
+  font-size:17px;
+  font-weight:600;
+}
+
+[data-theme=light] .finger-choices button {
+  color:#fff;
+}
+
+.finger-choices button[aria-pressed=true] {
+  outline:2px solid var(--text);
+  outline-offset:3px;
+}
+
+.finger-footer {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-top:20px;
+  gap:8px;
+  font-size:10px;
+  color:var(--muted);
 }
 
 .gesture-help {

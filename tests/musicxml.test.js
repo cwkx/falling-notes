@@ -42,6 +42,55 @@ test('parses the supplied Rachmaninoff archive, including its broken engraving t
   }
   assert.ok(result.notes.some((note) => note.measure === 45 && note.hand === 'left'));
   assert.ok(result.notes.some((note) => note.measure === 45 && note.hand === 'right'));
+  assert.ok(result.notes.every(note => note.finger === null && note.fingering === '' && note.fingerings.length === 0));
+});
+
+test('reads primary, alternate, and substitution fingerings without inventing ambiguous fingers', async () => {
+  const notation = body => `<notations><technical>${body}</technical></notations>`;
+  const result = await loadScore(score(
+    pitch('C', 4, 1, notation('<fingering>1</fingering><fingering alternate="yes">2</fingering>')) +
+    pitch('D', 4, 1, notation('<fingering>2</fingering><fingering substitution="yes">3</fingering>')) +
+    pitch('E', 4, 1, notation('<fingering>3</fingering><fingering>4</fingering>')) +
+    pitch('F', 4, 1, notation('<fingering alternate="yes">5</fingering>')),
+  ));
+  assert.deepEqual(result.notes.map(note => note.finger), [1, 2, null, null]);
+  assert.deepEqual(result.notes.map(note => note.fingering), ['1/2', '2–3', '3/4', '5']);
+  assert.deepEqual(result.notes[0].fingerings, [
+    { text: '1', alternate: false, substitution: false },
+    { text: '2', alternate: true, substitution: false },
+  ]);
+  assert.equal(result.notes[1].fingerings[1].substitution, true);
+});
+
+test('preserves non-piano fingering text without assigning piano finger colours', async () => {
+  const result = await loadScore(score(
+    pitch('C', 4, 1, '<notations><technical><fingering>p</fingering><pluck>i</pluck></technical></notations>') +
+    pitch('D', 4, 1, '<notations><technical><fingering>1-3</fingering></technical></notations>') +
+    pitch('E', 4, 1, '<notations><technical><fingering>0</fingering></technical></notations>') +
+    pitch('F', 4, 1, '<notations><technical><pluck>3</pluck></technical></notations>'),
+  ));
+  assert.deepEqual(result.notes.map(note => note.finger), [null, null, null, null]);
+  assert.deepEqual(result.notes.map(note => note.fingering), ['p', '1-3', '0', '']);
+});
+
+test('ties retain the starting finger and a substitution without introducing another attack', async () => {
+  const start = '<tie type="start"/><notations><technical><fingering>1</fingering></technical></notations>';
+  const end = '<tie type="stop"/><notations><technical><fingering substitution="yes">3</fingering></technical></notations>';
+  const result = await loadScore(score(`${pitch('C', 4, 4, start)}</measure><measure number="2">${pitch('C', 4, 4, end)}`));
+  assert.equal(result.events.length, 1);
+  assert.equal(result.notes.length, 1);
+  assert.equal(result.notes[0].finger, 1);
+  assert.equal(result.notes[0].fingering, '1–3');
+  assert.equal(result.notes[0].duration, 4);
+});
+
+test('repeated tied passages do not share mutable fingering lists', async () => {
+  const start = '<tie type="start"/><notations><technical><fingering>1</fingering></technical></notations>';
+  const end = '<tie type="stop"/><notations><technical><fingering substitution="yes">3</fingering></technical></notations>';
+  const result = await loadScore(score(`<barline><repeat direction="forward"/></barline>${pitch('C', 4, 4, start)}</measure><measure number="2">${pitch('C', 4, 4, end)}<barline><repeat direction="backward"/></barline>`));
+  assert.equal(result.notes.length, 2);
+  assert.deepEqual(result.notes.map(note => note.fingering), ['1–3', '1–3']);
+  assert.notEqual(result.notes[0].fingerings, result.notes[1].fingerings);
 });
 
 test('reads chords, multiple voices, backup, forward, and rests', async () => {

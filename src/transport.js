@@ -11,6 +11,8 @@ export class Transport {
     this.waiting = false;
     this.matched = new Set();
     this.loop = null;
+    this.loopGap = 1;
+    this.loopRest = 0;
     this.revision = 0;
     this.rebuildEvents();
   }
@@ -43,6 +45,7 @@ export class Transport {
     if (this.index < 0) this.index = this.events.length;
     this.matched.clear();
     this.waiting = false;
+    this.loopRest = 0;
     this.revision++;
   }
 
@@ -67,7 +70,12 @@ export class Transport {
 
   step(delta) {
     if (!this.playing) return [];
-    let next = this.position + Math.min(Math.max(0, delta), 0.1) * this.speed;
+    const elapsed = Math.min(Math.max(0, delta), 0.1);
+    if (this.loopRest > 0) {
+      this.loopRest = Math.max(0, this.loopRest - elapsed);
+      return [];
+    }
+    let next = this.position + elapsed * this.speed;
     const sounded = [];
     if (this.mode === 'wait' && this.target && next >= this.target.time) {
       next = this.target.time;
@@ -80,6 +88,7 @@ export class Transport {
     }
     if (this.loop && next >= this.loop.end) {
       this.seek(this.loop.start);
+      this.loopRest = this.loopGap;
     } else {
       this.position = next;
       if (this.position >= this.score.duration + 0.6) {

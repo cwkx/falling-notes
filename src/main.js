@@ -1,8 +1,10 @@
 import './style.css';
 import { loadScore } from './musicxml.js';
 import { PianoAudio } from './audio.js';
-import { FallingRenderer } from './renderer.js';
+import { FallingRenderer, FINGER_COLORS } from './renderer.js';
 import { Transport } from './transport.js';
+import { RollGestures } from './gestures.js';
+import { fingerprintScore, applyFingerings, setFingering } from './fingering.js';
 import defaultScoreUrl from '../prelude-in-c-sharp-minor-opus-3-no-2-sergei-rachmaninoff.mxl?url';
 
 const paths = {
@@ -21,6 +23,8 @@ const paths = {
   loop: '<path d="m16 2 4 4-4 4M4 11V8a2 2 0 0 1 2-2h14M8 22l-4-4 4-4m12-1v3a2 2 0 0 1-2 2H4"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
+  minus: '<path d="M5 12h14"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
 };
 const icon = name => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ''}</svg>`;
 const $ = selector => document.querySelector(selector);
@@ -47,31 +51,47 @@ $('#app').innerHTML = `
         <button id="listen-mode" aria-pressed="false" title="Play through the piece">${icon('headphones')}<span>Listen</span></button>
       </div>
       <div id="status" class="status" role="status"><span id="status-dot" class="status-dot"></span><span id="status-text">Loading score…</span><span id="mic-meter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-      <div class="hand-key"><span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span></div>
+      <div id="note-legend" class="hand-key"><span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span></div>
     </div>
     <div id="stage" class="stage">
-      <canvas id="roll" aria-label="Falling piano notes. Drag vertically to move through the score; horizontally to change speed. Use the timeline to seek with a keyboard."></canvas>
+      <canvas id="roll" aria-label="Falling piano notes. Drag vertically to seek, horizontally to change speed. Pinch to zoom, two fingers to pan. In finger colour mode, tap a note to mark its finger."></canvas>
+      <div class="view-tools" role="group" aria-label="Score view">
+        <button id="zoom-out" class="icon-button" aria-label="Zoom out">${icon('minus')}</button>
+        <button id="reset-view" title="Reset view" aria-label="Reset view"><span id="view-readout">1× · 8s</span></button>
+        <button id="zoom-in" class="icon-button" aria-label="Zoom in">${icon('plus')}</button>
+        <input id="view-pan" type="range" min="0" max="100" step="0.1" value="50" aria-label="Keyboard pan" hidden />
+      </div>
       <div id="gesture-feedback" class="gesture-feedback" aria-hidden="true"></div>
       <div id="drop-overlay" class="drop-overlay">${icon('open')}<span>Open MusicXML</span></div>
     </div>
   </main>
   <footer class="controls">
-    <div class="timeline-row"><span id="measure" class="measure">Measure 1</span><div class="timeline-wrap"><div id="loop-region"></div><input id="timeline" aria-label="Position in piece" type="range" min="0" max="100" step="0.01" value="0" /></div><span id="time" class="time">0:00 <span>/ 0:00</span></span></div>
+    <div class="timeline-row"><button id="measure" class="measure" title="Choose a measure">Measure 1</button><div class="timeline-wrap"><div id="loop-region"></div><input id="timeline" aria-label="Position in piece" type="range" min="0" max="100" step="0.01" value="0" /></div><span id="time" class="time">0:00 <span>/ 0:00</span></span></div>
     <div class="transport-row">
       <div class="transport-side"><button id="loop" class="icon-button" aria-label="Set loop start" title="Loop: set start, set end, clear">${icon('loop')}<span id="loop-label"></span></button><span id="loop-readout" class="loop-readout"></span></div>
       <div class="playback-buttons"><button id="restart" class="icon-button" aria-label="Restart" title="Restart (Home)">${icon('restart')}</button><button id="play" class="play-button" aria-label="Play" title="Play / pause (Space)" disabled>${icon('play')}</button><button id="next" class="icon-button" aria-label="Next notes" title="Next notes (Right arrow)">${icon('next')}</button></div>
-      <div class="speed-control"><button id="speed-value" aria-label="Reset speed to 100%" title="Reset speed">100<span>%</span></button><input id="speed" aria-label="Playback speed" type="range" min="25" max="150" step="5" value="100" /></div>
+      <div class="speed-control"><button id="speed-value" aria-label="Reset speed to 100%" title="Reset speed">100<span>%</span></button><input id="speed" aria-label="Playback speed" type="range" min="10" max="150" step="1" value="100" /></div>
     </div>
   </footer>
   <div id="toast" class="toast" role="alert" hidden></div>
   <dialog id="settings-dialog">
     <div class="dialog-heading"><h2>Practice settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings">${icon('close')}</button></div>
     <label class="setting-row"><span>Hands</span><select id="hands"><option value="both">Both hands</option><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
+    <label class="setting-row"><span>Note colours</span><select id="color-mode"><option value="hands">Hands</option><option value="fingers">Fingers</option></select></label>
+    <p id="fingering-status" class="setting-hint" hidden></p>
+    <div class="setting-row"><label for="lookahead">Notes ahead</label><div class="number-unit"><input id="lookahead" type="number" min="0.5" max="16" step="0.25" value="8" /><span>s</span></div><input id="lookahead-range" aria-label="Notes ahead" type="range" min="0.5" max="16" step="0.25" value="8" /></div>
+    <label class="setting-row"><span>Keyboard zoom</span><output id="zoom-value">1×</output><input id="keyboard-zoom" aria-label="Keyboard zoom" type="range" min="1" max="4" step="0.1" value="1" /></label>
+    <div class="setting-row"><label for="practice-measure">Passage</label><select id="practice-measure" aria-label="Passage measure"></select><div class="passage-actions"><button id="jump-measure" class="button">Go to measure</button><button id="loop-measure" class="button">Loop measure</button></div></div>
+    <label class="setting-row"><span>Pause between loops</span><select id="loop-gap"><option value="0">None</option><option value="0.5">0.5 seconds</option><option value="1" selected>1 second</option><option value="2">2 seconds</option></select></label>
     <label class="setting-row"><span>Microphone sensitivity</span><output id="sensitivity-value">55%</output><input id="sensitivity" aria-label="Microphone sensitivity" type="range" min="15" max="95" step="5" value="55" /></label>
     <label class="setting-row"><span>Piano tuning · A4</span><div class="number-unit"><input id="tuning" type="number" min="415" max="466" step="1" value="440" aria-label="Piano tuning A4 in Hertz" /><span>Hz</span></div></label>
-    <label class="setting-row"><span>Notes ahead</span><select id="lookahead"><option value="5">5 seconds</option><option value="8" selected>8 seconds</option><option value="12">12 seconds</option></select></label>
     <div class="settings-note">Microphone audio stays on your device. Play notes together or build a chord one note at a time.</div>
-    <div class="gesture-help"><span>↕ Drag to seek</span><span>↔ Drag to change speed</span><span>Space to play / pause</span></div>
+    <div class="gesture-help"><span>↕ Seek · ↔ Speed</span><span>Pinch to zoom · two fingers to pan</span><span>Ctrl + scroll to zoom · Shift + scroll to pan</span></div>
+  </dialog>
+  <dialog id="finger-dialog" class="finger-dialog" aria-labelledby="finger-note">
+    <div class="dialog-heading"><h2 id="finger-note">Fingering</h2><button id="close-finger" class="icon-button" aria-label="Close fingering">${icon('close')}</button></div>
+    <div class="finger-choices">${[1, 2, 3, 4, 5].map(finger => `<button data-finger="${finger}" aria-label="Finger ${finger}">${finger}</button>`).join('')}</div>
+    <div class="finger-footer"><span>1 = thumb · 5 = little finger</span><button data-finger="clear" class="button">Reset</button></div>
   </dialog>
 `;
 
@@ -80,6 +100,10 @@ const renderer = new FallingRenderer($('#roll'));
 let transport;
 let score;
 let lookAhead = 8;
+let colorMode = saved('color-mode', 'hands') === 'fingers' ? 'fingers' : 'hands';
+let fingeringKey = '';
+let fingeringOverrides = {};
+let selectedNote = null;
 let loadRevision = 0;
 let fileRevision = 0;
 let startRevision = 0;
@@ -87,7 +111,6 @@ let starting = false;
 let loopStart = null;
 let wakeLock;
 let seekDragging = false;
-let gesture = null;
 let active = new Map();
 let lastAudioPoll = 0;
 let audioResult = { level: 0, matches: [] };
@@ -101,6 +124,7 @@ function applyTheme() {
   $('#theme').innerHTML = icon(theme === 'dark' ? 'sun' : 'moon');
   $('#theme').setAttribute('aria-label', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
   save('theme', theme);
+  updateLegend();
 }
 applyTheme();
 
@@ -149,7 +173,8 @@ async function play() {
     if (revision !== startRevision) return;
     if (transport.mode === 'wait') await audio.startMicrophone();
     if (revision !== startRevision) return;
-    if (transport.position >= score.duration) transport.seek(-1.5);
+    if (transport.position >= score.duration) seek(transport.loop?.start ?? leadIn());
+    else if (transport.position < 0) seek(leadIn());
     lastToken = '';
     transport.playing = true;
     keepAwake();
@@ -163,6 +188,7 @@ async function play() {
 
 function seek(time) {
   if (!transport) return;
+  if (time < 0) time = Math.max(time, leadIn());
   transport.seek(time);
   audio.reset();
   audio.stopSounds();
@@ -171,13 +197,74 @@ function seek(time) {
   updateControls();
 }
 
+function leadIn() {
+  return -Math.min(lookAhead * .5, (transport?.speed || 1) * 1.5);
+}
+
 function setSpeed(percent) {
-  percent = Math.max(25, Math.min(150, Math.round(percent / 5) * 5));
+  percent = Math.max(10, Math.min(150, Math.round(percent)));
   if (transport) transport.speed = percent / 100;
   $('#speed').value = percent;
   $('#speed-value').innerHTML = `${percent}<span>%</span>`;
-  $('#speed').style.setProperty('--progress', `${(percent - 25) / 1.25}%`);
+  $('#speed').style.setProperty('--progress', `${(percent - 10) / 1.4}%`);
   save('speed', percent);
+  if (transport?.position < 0) seek(leadIn());
+}
+
+function setLookAhead(seconds) {
+  lookAhead = Math.max(.5, Math.min(16, Math.round((Number(seconds) || 8) * 4) / 4));
+  $('#lookahead').value = lookAhead;
+  $('#lookahead-range').value = lookAhead;
+  $('#lookahead-range').style.setProperty('--progress', `${(lookAhead - .5) / 15.5 * 100}%`);
+  save('lookahead', lookAhead);
+  if (transport?.position < leadIn()) seek(leadIn());
+  updateView();
+}
+
+function updateView() {
+  $('#keyboard-zoom').value = renderer.zoom;
+  $('#zoom-value').value = `${Number(renderer.zoom.toFixed(1))}×`;
+  $('#view-readout').textContent = `${Number(renderer.zoom.toFixed(1))}× · ${lookAhead}s`;
+  $('#keyboard-zoom').style.setProperty('--progress', `${(renderer.zoom - 1) / 3 * 100}%`);
+  const panRange = renderer.width * (renderer.zoom - 1);
+  $('#view-pan').hidden = panRange < 1;
+  $('#view-pan').value = panRange > 0 ? -renderer.pan / panRange * 100 : 50;
+  $('#view-pan').style.setProperty('--progress', `${$('#view-pan').value}%`);
+}
+
+function updateLegend() {
+  if (colorMode === 'fingers') {
+    $('#note-legend').innerHTML = [1, 2, 3, 4, 5].map(finger => `<span><i style="background:${FINGER_COLORS[theme][finger - 1]}"></i>${finger}</span>`).join('');
+  } else $('#note-legend').innerHTML = '<span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span>';
+  document.querySelectorAll('[data-finger]').forEach(button => {
+    const finger = Number(button.dataset.finger);
+    if (finger) button.style.setProperty('--finger-color', FINGER_COLORS[theme][finger - 1]);
+  });
+  $('#fingering-status').hidden = colorMode !== 'fingers';
+  const count = score?.notes.filter(note => note.finger).length || 0;
+  $('#fingering-status').textContent = count ? `${count} notes marked. Tap a note to edit. Saved on this device.` : 'No fingerings in this score. Tap a note to mark one. Saved on this device.';
+}
+
+function editFingering(note) {
+  if (colorMode !== 'fingers') return;
+  pause();
+  selectedNote = note;
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  $('#finger-note').textContent = `${note.hand === 'left' ? 'Left' : 'Right'} · ${names[note.midi % 12]}${Math.floor(note.midi / 12) - 1}`;
+  document.querySelectorAll('[data-finger]').forEach(button => button.setAttribute('aria-pressed', Number(button.dataset.finger) === note.finger));
+  $('#finger-dialog').showModal();
+}
+
+function setLoop(start, end) {
+  if (!transport || end <= start) return;
+  loopStart = start;
+  transport.loop = { start, end };
+  $('#loop').classList.add('selected');
+  $('#loop-label').textContent = 'A–B';
+  $('#loop-readout').textContent = `${formatTime(start)}–${formatTime(end)}`;
+  $('#loop').setAttribute('aria-label', 'Clear loop');
+  $('#loop-region').style.cssText = `display:block;left:${start / score.duration * 100}%;width:${(end - start) / score.duration * 100}%`;
+  seek(start);
 }
 
 function setMode(mode) {
@@ -193,7 +280,7 @@ function setMode(mode) {
 
 function clearLoop() {
   loopStart = null;
-  if (transport) transport.loop = null;
+  if (transport) { transport.loop = null; transport.loopRest = 0; }
   $('#loop').classList.remove('selected');
   $('#loop').setAttribute('aria-label', 'Set loop start');
   $('#loop-label').textContent = '';
@@ -223,6 +310,7 @@ function updateControls() {
   let status = 'Ready when you are';
   if (transport.position >= score.duration && !playing) status = 'Complete';
   else if (starting) status = transport.mode === 'wait' ? 'Connecting microphone…' : 'Starting…';
+  else if (transport.playing && transport.loopRest > 0) status = `Again in ${transport.loopRest.toFixed(1)}s`;
   else if (transport.playing) status = transport.mode === 'listen' ? 'Playing' : transport.waiting ? 'Your turn' : 'Listening';
   else if (transport.position > 0) status = 'Paused';
   if ($('#status-text').textContent !== status) $('#status-text').textContent = status;
@@ -241,9 +329,22 @@ async function openScore(input, filename, isDefault = false) {
     const loaded = await loadScore(input, filename);
     if (revision !== loadRevision) return;
     score = loaded;
+    fingeringKey = `fingering:${fingerprintScore(score)}`;
+    try { fingeringOverrides = JSON.parse(saved(fingeringKey, '{}')); } catch { fingeringOverrides = {}; }
+    if (!fingeringOverrides || Array.isArray(fingeringOverrides) || typeof fingeringOverrides !== 'object') fingeringOverrides = {};
+    applyFingerings(score, fingeringOverrides);
     transport = new Transport(score);
+    transport.loopGap = Number($('#loop-gap').value);
     transport.setHand($('#hands').value);
     renderer.setScore(score);
+    updateView();
+    updateLegend();
+    $('#practice-measure').replaceChildren(...score.measures.map((measure, index) => {
+      const option = document.createElement('option');
+      option.value = index;
+      option.textContent = `Measure ${measure.number} · ${formatTime(measure.start)}`;
+      return option;
+    }));
     if (isDefault) {
       $('#piece-title').textContent = 'Prelude in C-sharp Minor';
       $('#composer').textContent = 'Sergei Rachmaninoff · Op. 3, No. 2';
@@ -311,18 +412,19 @@ $('#loop').addEventListener('click', () => {
     toast('Loop start set. Move to the end, then tap loop again.');
   } else {
     const start = Math.min(loopStart, Math.max(0, transport.position));
-    const end = Math.min(score.duration, Math.max(loopStart, transport.position, start + 1));
+    const end = Math.min(score.duration, Math.max(loopStart, transport.position, start + .1));
     if (end <= start) { clearLoop(); return; }
-    transport.loop = { start, end };
-    $('#loop-label').textContent = 'A–B';
-    $('#loop-readout').textContent = `${formatTime(start)}–${formatTime(end)}`;
-    $('#loop').setAttribute('aria-label', 'Clear loop');
-    $('#loop-region').style.cssText = `display:block;left:${start / score.duration * 100}%;width:${(end - start) / score.duration * 100}%`;
-    seek(start);
+    setLoop(start, end);
   }
 });
 
-$('#settings').addEventListener('click', () => $('#settings-dialog').showModal());
+function openSettings() {
+  const measure = currentMeasure();
+  if (measure) $('#practice-measure').value = score.measures.indexOf(measure);
+  $('#settings-dialog').showModal();
+}
+$('#settings').addEventListener('click', openSettings);
+$('#measure').addEventListener('click', () => { openSettings(); $('#practice-measure').focus(); });
 $('#close-settings').addEventListener('click', () => $('#settings-dialog').close());
 $('#settings-dialog').addEventListener('click', event => {
   if (event.target === $('#settings-dialog')) {
@@ -340,7 +442,44 @@ $('#tuning').addEventListener('change', event => {
   event.target.value = value;
   audio.referencePitch = value;
 });
-$('#lookahead').addEventListener('change', event => { lookAhead = Number(event.target.value); });
+$('#lookahead').addEventListener('change', event => setLookAhead(event.target.value));
+$('#lookahead-range').addEventListener('input', event => setLookAhead(event.target.value));
+$('#keyboard-zoom').addEventListener('input', event => { renderer.setZoom(Number(event.target.value)); updateView(); });
+$('#color-mode').value = colorMode;
+$('#color-mode').addEventListener('change', event => { colorMode = event.target.value; save('color-mode', colorMode); updateLegend(); });
+$('#view-pan').addEventListener('input', event => {
+  const desiredPan = -Number(event.target.value) / 100 * renderer.width * (renderer.zoom - 1);
+  renderer.panBy(desiredPan - renderer.pan);
+  updateView();
+});
+for (const [id, factor] of [['zoom-in', 1.25], ['zoom-out', .8]]) {
+  $(`#${id}`).addEventListener('click', () => { renderer.setZoom(renderer.zoom * factor); setLookAhead(lookAhead / factor); });
+}
+$('#reset-view').addEventListener('click', () => { renderer.resetView(); setLookAhead(8); });
+$('#loop-gap').addEventListener('change', event => { if (transport) { transport.loopGap = Number(event.target.value); transport.loopRest = 0; } });
+$('#jump-measure').addEventListener('click', () => {
+  const measure = score?.measures[Number($('#practice-measure').value)];
+  if (!measure) return;
+  clearLoop();
+  seek(measure.start);
+  $('#settings-dialog').close();
+});
+$('#loop-measure').addEventListener('click', () => {
+  const measure = score?.measures[Number($('#practice-measure').value)];
+  if (!measure) return;
+  setLoop(measure.start, Math.min(score.duration, measure.start + measure.duration));
+  $('#settings-dialog').close();
+});
+$('#close-finger').addEventListener('click', () => $('#finger-dialog').close());
+$('#finger-dialog').addEventListener('close', () => { selectedNote = null; });
+document.querySelectorAll('[data-finger]').forEach(button => button.addEventListener('click', () => {
+  if (!selectedNote) return;
+  setFingering(score, selectedNote.id, button.dataset.finger === 'clear' ? null : Number(button.dataset.finger), fingeringOverrides);
+  save(fingeringKey, JSON.stringify(fingeringOverrides));
+  updateLegend();
+  $('#finger-dialog').close();
+}));
+setLookAhead(Number(saved('lookahead', '8')));
 
 $('#fullscreen').addEventListener('click', async () => {
   try {
@@ -365,50 +504,28 @@ function updateFullscreen() {
 document.addEventListener('fullscreenchange', updateFullscreen);
 document.addEventListener('webkitfullscreenchange', updateFullscreen);
 
-$('#roll').addEventListener('pointerdown', event => {
-  if (!transport || (event.pointerType === 'mouse' && event.button !== 0)) return;
-  const midi = renderer.noteAt(event.clientX, event.clientY);
-  if (midi !== null && midi !== undefined) {
+const gestures = new RollGestures($('#roll'), {
+  renderer,
+  ready: () => !!transport,
+  position: () => transport.position,
+  positionText: () => formatTime(transport.position),
+  speed: () => transport.speed,
+  lookAhead: () => lookAhead,
+  seek, setSpeed, setLookAhead,
+  stopSounds: () => audio.stopSounds(),
+  viewChanged: updateView,
+  feedback(text) {
+    $('#gesture-feedback').textContent = text;
+    $('#gesture-feedback').classList.toggle('visible', !!text);
+  },
+  key(midi) {
     renderer.hit(midi);
     active.set(midi, performance.now() + 400);
     if (!audio.active) audio.resume().then(() => audio.play(midi, .6)).catch(() => {});
     transport.accept([midi]);
-    return;
-  }
-  gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, position: transport.position, speed: transport.speed, axis: null };
-  $('#roll').setPointerCapture(event.pointerId);
+  },
+  note: editFingering,
 });
-$('#roll').addEventListener('pointermove', event => {
-  if (!gesture || gesture.id !== event.pointerId) return;
-  const dx = event.clientX - gesture.x;
-  const dy = event.clientY - gesture.y;
-  if (!gesture.axis && Math.hypot(dx, dy) > 8) {
-    gesture.axis = Math.abs(dx) > Math.abs(dy) ? 'speed' : 'time';
-    if (gesture.axis === 'time') audio.stopSounds();
-  }
-  if (!gesture.axis) return;
-  if (gesture.axis === 'time') {
-    seek(gesture.position - dy / Math.max(180, $('#roll').clientHeight - 100) * lookAhead);
-    $('#gesture-feedback').textContent = formatTime(transport.position);
-  } else {
-    setSpeed((gesture.speed + dx / Math.max(300, $('#roll').clientWidth) * 1.5) * 100);
-    $('#gesture-feedback').textContent = `${Math.round(transport.speed * 100)}%`;
-  }
-  $('#gesture-feedback').classList.add('visible');
-});
-function endGesture(event) {
-  if (!gesture || gesture.id !== event.pointerId) return;
-  gesture = null;
-  $('#gesture-feedback').classList.remove('visible');
-}
-$('#roll').addEventListener('pointerup', endGesture);
-$('#roll').addEventListener('pointercancel', endGesture);
-$('#roll').addEventListener('wheel', event => {
-  if (!transport) return;
-  event.preventDefault();
-  if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) setSpeed(transport.speed * 100 + Math.sign(event.deltaX || event.deltaY) * 5);
-  else seek(transport.position + event.deltaY * .012);
-}, { passive: false });
 
 let dragDepth = 0;
 window.addEventListener('dragenter', event => { event.preventDefault(); if (event.dataTransfer.types.includes('Files')) { dragDepth++; $('#drop-overlay').classList.add('visible'); } });
@@ -430,7 +547,7 @@ window.addEventListener('keydown', event => {
   else if (event.code === 'Home') { event.preventDefault(); seek(-2); }
   else if (event.code === 'Escape') { document.documentElement.classList.remove('focus-mode'); updateFullscreen(); }
 });
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { gestures.cancel(); pause(); } });
 window.addEventListener('pagehide', pause);
 
 let lastFrame = performance.now();
@@ -441,11 +558,17 @@ function frame(now) {
   lastFrame = now;
   if (transport) {
     const wasPlaying = transport.playing;
-    if (!seekDragging && gesture?.axis !== 'time') {
+    if (!seekDragging && !gestures.scrubbing) {
       const previousRevision = transport.revision;
       const notes = transport.step(delta);
       const looped = previousRevision !== transport.revision;
-      if (looped) { audio.stopSounds(); active.clear(); }
+      if (looped) {
+        audio.stopSounds();
+        active.clear();
+        // A loop is still the same performance. Preserve held-note history so
+        // a sustained chord cannot satisfy the next lap without a fresh strike.
+        lastRecognitionRevision = transport.revision;
+      }
       for (const note of looped ? [] : notes) {
         audio.play(note.midi, Math.min(8, note.duration / transport.speed));
         renderer.hit(note.midi);
@@ -462,13 +585,13 @@ function frame(now) {
         lastToken = transport.token;
       }
       if (now - lastAudioPoll > 32) {
-        const accepting = transport.waiting || (transport.target && transport.target.time - transport.position <= .15);
+        const accepting = transport.loopRest <= 0 && !gestures.busy && !seekDragging && (transport.waiting || (transport.target && transport.target.time - transport.position <= .15));
         audioResult = audio.poll([...transport.expected], now, Boolean(accepting));
         lastAudioPoll = now;
         if (audioResult.active === false || audioResult.suspended) {
           pause();
           toast('Microphone interrupted. Press play to reconnect.');
-        } else if (!seekDragging && !gesture) {
+        } else if (!seekDragging && !gestures.busy && transport.loopRest <= 0) {
           for (const midi of transport.accept(audioResult.matches)) {
             renderer.hit(midi);
             active.set(midi, now + 650);
@@ -479,7 +602,7 @@ function frame(now) {
     if (wasPlaying && !transport.playing) pause();
     for (const [midi, until] of active) if (now > until) active.delete(midi);
     if (now - lastRender > (transport.playing ? 12 : 30)) {
-      renderer.render({ time: transport.position, lookAhead, playing: transport.playing, waiting: transport.waiting, expected: transport.expected, matched: transport.matched, active: new Set(active.keys()), theme, now, hand: transport.hand });
+      renderer.render({ time: transport.position, lookAhead, playing: transport.playing, waiting: transport.waiting, expected: transport.expected, matched: transport.matched, active: new Set(active.keys()), theme, now, hand: transport.hand, colorMode, selectedNoteId: selectedNote?.id });
       lastRender = now;
     }
     if (now - lastControlUpdate > 120) { updateControls(); lastControlUpdate = now; }

@@ -80,3 +80,35 @@ test('paused and early recognition cannot complete a future chord', () => {
   assert.deepEqual(t.accept([48, 60]), []);
   assert.equal(t.index, 0);
 });
+
+test('loop rest uses real time, even at very slow speed, and can be cleared by seeking', () => {
+  const t = new Transport(score);
+  t.setMode('listen');
+  t.loop = { start: 0, end: 1 };
+  t.loopGap = .5;
+  t.speed = .1;
+  t.seek(.999);
+  t.playing = true;
+  t.step(.1);
+  assert.equal(t.position, 0);
+  assert.equal(t.loopRest, .5);
+  for (let i = 0; i < 4; i++) assert.deepEqual(t.step(.1), []);
+  assert.equal(t.position, 0);
+  assert.ok(Math.abs(t.loopRest - .1) < 1e-8);
+  t.seek(0);
+  assert.equal(t.loopRest, 0);
+  assert.equal(t.step(.1).length, 2);
+});
+
+test('wait mode never requires a note outside the loop and rests before the next lap', () => {
+  const t = new Transport(score);
+  t.loop = { start: 0, end: .5 };
+  t.loopGap = .5;
+  t.seek(.49);
+  t.playing = true;
+  t.step(.1);
+  assert.equal(t.position, 0);
+  assert.equal(t.waiting, false);
+  assert.deepEqual(t.accept([48, 60]), []);
+  assert.equal(t.loopRest, .5);
+});
