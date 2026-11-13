@@ -1,7 +1,7 @@
 import './style.css';
 import { loadScore } from './musicxml.js';
 import { PianoAudio } from './audio.js';
-import { FallingRenderer, FINGER_COLORS } from './renderer.js';
+import { FallingRenderer, FINGER_COLORS, UNMARKED_COLORS } from './renderer.js';
 import { Transport } from './transport.js';
 import { RollGestures } from './gestures.js';
 import { fingerprintScore, applyFingerings, setFingering, applyHands, setNoteHand } from './fingering.js';
@@ -106,7 +106,9 @@ const renderer = new FallingRenderer($('#roll'));
 let transport;
 let score;
 let lookAhead = 8;
-let colorMode = saved('color-mode', 'hands') === 'fingers' ? 'fingers' : 'hands';
+let colorPreference = saved('color-mode', '');
+if (!['hands', 'fingers'].includes(colorPreference)) colorPreference = '';
+let colorMode = colorPreference || 'hands';
 let fingeringKey = '';
 let fingeringOverrides = {};
 let handKey = '';
@@ -244,7 +246,7 @@ function updateView() {
 
 function updateLegend() {
   if (colorMode === 'fingers') {
-    $('#note-legend').innerHTML = [1, 2, 3, 4, 5].map(finger => `<span><i style="background:${FINGER_COLORS[theme][finger - 1]}"></i>${finger}</span>`).join('');
+    $('#note-legend').innerHTML = '<span class="legend-title">Fingers</span>' + [1, 2, 3, 4, 5].map(finger => `<span><i style="background:${FINGER_COLORS[theme][finger - 1]}"></i>${finger}</span>`).join('') + `<span><i style="background:${UNMARKED_COLORS[theme]}"></i>Unmarked</span>`;
   } else $('#note-legend').innerHTML = '<span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span>';
   document.querySelectorAll('[data-finger]').forEach(button => {
     const finger = Number(button.dataset.finger);
@@ -371,6 +373,8 @@ async function openScore(input, filename, isDefault = false) {
     if (!handOverrides || Array.isArray(handOverrides) || typeof handOverrides !== 'object') handOverrides = {};
     applyHands(score, handOverrides);
     applyFingerings(score, fingeringOverrides);
+    if (!colorPreference) colorMode = score.notes.some(note => note.fingering) ? 'fingers' : 'hands';
+    $('#color-mode').value = colorMode;
     updateReach();
     transport = new Transport(score);
     transport.loopGap = Number($('#loop-gap').value);
@@ -485,7 +489,7 @@ $('#lookahead').addEventListener('change', event => setLookAhead(event.target.va
 $('#lookahead-range').addEventListener('input', event => setLookAhead(event.target.value));
 $('#keyboard-zoom').addEventListener('input', event => { renderer.setZoom(Number(event.target.value)); updateView(); });
 $('#color-mode').value = colorMode;
-$('#color-mode').addEventListener('change', event => { colorMode = event.target.value; save('color-mode', colorMode); updateLegend(); });
+$('#color-mode').addEventListener('change', event => { colorPreference = colorMode = event.target.value; save('color-mode', colorMode); updateLegend(); });
 $('#reach').value = String(reach);
 if (!$('#reach').value) { reach = 0; $('#reach').value = '0'; }
 $('#reach').addEventListener('change', event => { reach = Number(event.target.value); save('reach', reach); updateReach(); });

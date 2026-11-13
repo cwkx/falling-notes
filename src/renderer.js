@@ -6,6 +6,7 @@ export const FINGER_COLORS = {
   dark: ['#f0bc6b', '#76c8eb', '#ed91b8', '#a7da83', '#c2a1ed'],
   light: ['#aa691a', '#247ba4', '#b74677', '#507e29', '#7950ad'],
 };
+export const UNMARKED_COLORS = { dark: '#a4a9ad', light: '#6d747a' };
 
 const THEMES = {
   dark: {
@@ -288,16 +289,17 @@ export class FallingRenderer {
       const { key, bottom, x, y, width: noteWidth, height: noteHeight } = bounds;
       const isLeft = note.hand === 'left';
       const knownFinger = Number.isInteger(note.finger) && note.finger >= 1 && note.finger <= 5;
-      const fingerColor = colorMode === 'fingers' && knownFinger ? FINGER_COLORS[theme === 'light' ? 'light' : 'dark'][note.finger - 1] : null;
-      const color = fingerColor || (isLeft ? colors.left : colors.right);
+      const fingerMode = colorMode === 'fingers';
+      const palette = theme === 'light' ? 'light' : 'dark';
+      const fingerColor = knownFinger ? FINGER_COLORS[palette][note.finger - 1] : UNMARKED_COLORS[palette];
+      const color = fingerMode ? fingerColor : isLeft ? colors.left : colors.right;
       const nearLine = Math.abs(note.start - time) < .085;
       const target = nearLine && expected.has(note.midi);
       const complete = target && matched.has(note.midi);
       const fade = clamp((bottom + 16) / 60, .12, 1);
-      const unknownFinger = colorMode === 'fingers' && !note.fingering && !knownFinger;
-      ctx.globalAlpha = fade * (complete ? .55 : unknownFinger ? .58 : 1);
+      ctx.globalAlpha = fade * (complete ? .55 : 1);
       const fill = ctx.createLinearGradient(0, y, 0, Math.max(y + 1, bottom));
-      fill.addColorStop(0, fingerColor ? `${fingerColor}99` : isLeft ? colors.leftDark : colors.rightDark);
+      fill.addColorStop(0, fingerMode ? `${fingerColor}99` : isLeft ? colors.leftDark : colors.rightDark);
       fill.addColorStop(1, color);
       ctx.fillStyle = fill;
       if (target && waiting) {
@@ -340,10 +342,6 @@ export class FallingRenderer {
         ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
         const labelY = Math.min(strikeY - 4, bottom - (fingerLabel ? 3 : 7));
         ctx.fillText(label, key.center, labelY, noteWidth - 2);
-        if (colorMode === 'fingers' && noteWidth >= 27 && noteHeight >= 34) {
-          ctx.font = '500 8px system-ui, sans-serif';
-          ctx.fillText(isLeft ? 'L' : 'R', key.center, labelY - fontSize - 3);
-        }
       }
     }
     ctx.globalAlpha = 1;
