@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FallingRenderer, FINGER_COLORS, UNMARKED_COLORS } from '../src/renderer.js';
+import { FallingRenderer, FINGER_COLORS } from '../src/renderer.js';
 
 function rendererFixture({ width = 720, height = 540, reducedMotion = false } = {}) {
   const bounds = { left: 15, top: 25, width, height };
   const text = [];
   const stops = [];
+  const fills = [];
   const context = new Proxy({
+    fill() { fills.push(this.fillStyle); },
     fillText: (...args) => text.push(args),
     createLinearGradient: () => ({ addColorStop: (offset, color) => stops.push(color) }),
     createRadialGradient: () => ({ addColorStop: (offset, color) => stops.push(color) }),
@@ -21,7 +23,7 @@ function rendererFixture({ width = 720, height = 540, reducedMotion = false } = 
     { id: 2, midi: 84, start: 1, duration: 1, hand: 'right' },
   ];
   renderer.setScore({ notes, measures: [{ number: 1, start: 0, duration: 4 }] });
-  return { renderer, bounds, text, stops, notes };
+  return { renderer, bounds, text, stops, fills, notes };
 }
 
 test('zoom keeps the chosen piano key under the pinch anchor', () => {
@@ -86,20 +88,20 @@ test('short-note fingering badges and hit targets use the same visible geometry'
   assert.equal(renderer.noteFromPoint(bounds.left + rect.key.center, bounds.top + rect.y + rect.height / 2), null);
 });
 
-test('finger colours are distinct and unmarked notes are neutral in both themes', () => {
-  const { renderer, stops } = rendererFixture();
+test('finger badges never replace hand colours on marked or unmarked notes', () => {
+  const { renderer, stops, fills } = rendererFixture({ width: 1260 });
   for (const theme of ['dark', 'light']) {
     assert.equal(new Set(FINGER_COLORS[theme]).size, 5);
-    stops.length = 0;
+    stops.length = fills.length = 0;
     renderer.render({ time: -.1, lookAhead: 1, colorMode: 'fingers', theme });
-    assert.ok(stops.includes(FINGER_COLORS[theme][1]));
-    assert.ok(stops.includes(UNMARKED_COLORS[theme]));
-    assert.ok(!stops.includes(theme === 'dark' ? '#b8a3ea' : '#9b7bc7'));
-    assert.ok(!stops.includes(theme === 'dark' ? '#9ae3bf' : '#4eae83'));
+    assert.ok(fills.includes(FINGER_COLORS[theme][1]));
+    assert.ok(!stops.includes(FINGER_COLORS[theme][1]));
+    assert.ok(stops.includes(theme === 'dark' ? '#b8a3ea' : '#9b7bc7'));
+    assert.ok(stops.includes(theme === 'dark' ? '#9ae3bf' : '#4eae83'));
   }
 });
 
-test('wide notes have no redundant hand letters and ambiguous fingers stay neutral', () => {
+test('wide notes have no redundant hand letters and ambiguous fingers retain their hand colour', () => {
   const { renderer, text, stops, notes } = rendererFixture({ width: 1260 });
   notes[0].fingering = '3/4';
   notes[1].duration = 1;
@@ -114,7 +116,7 @@ test('wide notes have no redundant hand letters and ambiguous fingers stay neutr
   renderer.resetView();
   renderer.render({ time: -.1, lookAhead: 1, colorMode: 'fingers' });
   assert.ok(text.some(([label]) => label === '3/4'));
-  assert.ok(stops.includes(UNMARKED_COLORS.dark));
+  assert.ok(stops.includes('#b8a3ea'));
 });
 
 test('zoom indicates unplayed offscreen targets and skips already matched ones', () => {

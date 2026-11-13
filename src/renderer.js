@@ -6,7 +6,6 @@ export const FINGER_COLORS = {
   dark: ['#f0bc6b', '#76c8eb', '#ed91b8', '#a7da83', '#c2a1ed'],
   light: ['#aa691a', '#247ba4', '#b74677', '#507e29', '#7950ad'],
 };
-export const UNMARKED_COLORS = { dark: '#a4a9ad', light: '#6d747a' };
 
 const THEMES = {
   dark: {
@@ -291,15 +290,15 @@ export class FallingRenderer {
       const knownFinger = Number.isInteger(note.finger) && note.finger >= 1 && note.finger <= 5;
       const fingerMode = colorMode === 'fingers';
       const palette = theme === 'light' ? 'light' : 'dark';
-      const fingerColor = knownFinger ? FINGER_COLORS[palette][note.finger - 1] : UNMARKED_COLORS[palette];
-      const color = fingerMode ? fingerColor : isLeft ? colors.left : colors.right;
+      const fingerColor = fingerMode && knownFinger ? FINGER_COLORS[palette][note.finger - 1] : null;
+      const color = isLeft ? colors.left : colors.right;
       const nearLine = Math.abs(note.start - time) < .085;
       const target = nearLine && expected.has(note.midi);
       const complete = target && matched.has(note.midi);
       const fade = clamp((bottom + 16) / 60, .12, 1);
       ctx.globalAlpha = fade * (complete ? .55 : 1);
       const fill = ctx.createLinearGradient(0, y, 0, Math.max(y + 1, bottom));
-      fill.addColorStop(0, fingerMode ? `${fingerColor}99` : isLeft ? colors.leftDark : colors.rightDark);
+      fill.addColorStop(0, isLeft ? colors.leftDark : colors.rightDark);
       fill.addColorStop(1, color);
       ctx.fillStyle = fill;
       if (target && waiting) {
@@ -341,6 +340,16 @@ export class FallingRenderer {
         const fontSize = fingerLabel ? clamp(noteWidth / Math.max(1.4, label.length * .65), 8, 13) : Math.min(11, noteWidth * .39);
         ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
         const labelY = Math.min(strikeY - 4, bottom - (fingerLabel ? 3 : 7));
+        if (fingerColor && noteWidth >= 15) {
+          // Fingering annotates the hand-coloured bar without replacing it.
+          // Leave a border even on the shortest labelled notes.
+          const badgeWidth = Math.min(noteWidth - 4, fontSize * label.length * .65 + 6);
+          const badgeHeight = Math.min(noteHeight - 4, fontSize + 4);
+          ctx.fillStyle = fingerColor;
+          roundRect(ctx, key.center - badgeWidth / 2, labelY - badgeHeight, badgeWidth, badgeHeight + 1, 3);
+          ctx.fill();
+          ctx.fillStyle = theme === 'light' ? '#ffffff' : '#14251e';
+        }
         ctx.fillText(label, key.center, labelY, noteWidth - 2);
       }
     }

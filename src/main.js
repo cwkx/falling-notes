@@ -1,7 +1,7 @@
 import './style.css';
 import { loadScore } from './musicxml.js';
 import { PianoAudio } from './audio.js';
-import { FallingRenderer, FINGER_COLORS, UNMARKED_COLORS } from './renderer.js';
+import { FallingRenderer, FINGER_COLORS } from './renderer.js';
 import { Transport } from './transport.js';
 import { RollGestures } from './gestures.js';
 import { fingerprintScore, applyFingerings, setFingering, applyHands, setNoteHand } from './fingering.js';
@@ -55,7 +55,7 @@ $('#app').innerHTML = `
       <div id="note-legend" class="hand-key"><span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span></div>
     </div>
     <div id="stage" class="stage">
-      <canvas id="roll" aria-label="Falling piano notes. Drag vertically to seek, horizontally to change speed. Pinch to zoom, two fingers to pan. In finger colour mode, tap a note to mark its finger."></canvas>
+      <canvas id="roll" aria-label="Falling piano notes. Drag vertically to seek, horizontally to change speed. Pinch to zoom, two fingers to pan. With Hands + fingers selected, tap a note to edit its finger or hand."></canvas>
       <div class="view-tools" role="group" aria-label="Score view">
         <button id="zoom-out" class="icon-button" aria-label="Zoom out">${icon('minus')}</button>
         <button id="reset-view" title="Reset view" aria-label="Reset view"><span id="view-readout">1× · 8s</span></button>
@@ -78,7 +78,7 @@ $('#app').innerHTML = `
   <dialog id="settings-dialog">
     <div class="dialog-heading"><h2>Practice settings</h2><button id="close-settings" class="icon-button" aria-label="Close settings">${icon('close')}</button></div>
     <label class="setting-row"><span>Hands</span><select id="hands"><option value="both">Both hands</option><option value="right">Right hand</option><option value="left">Left hand</option></select></label>
-    <label class="setting-row"><span>Note colours</span><select id="color-mode"><option value="hands">Hands</option><option value="fingers">Fingers</option></select></label>
+    <label class="setting-row"><span>Note display</span><select id="color-mode"><option value="hands">Hands</option><option value="fingers">Hands + fingers</option></select></label>
     <p id="fingering-status" class="setting-hint" hidden></p>
     <p id="score-edition" class="setting-hint" hidden><a href="https://s9.imslp.org/files/imglnks/usimg/7/75/IMSLP11125-Godowsky_APS_47_Rachmaninoff-Prelude_Op.3_No.2.pdf" target="_blank" rel="noreferrer">Godowsky, 1923</a> · <a href="${defaultScoreUrl}" download="rachmaninoff-op3-no2-fingered.mxl">Download printed fingerings</a></p>
     <label class="setting-row"><span>Reach guide</span><select id="reach"><option value="0">Off</option><option value="7">Fifth · C–G</option><option value="9">Sixth · C–A</option><option value="10">Minor seventh · C–B♭</option><option value="11">Seventh · C–B</option><option value="12">Octave · C–C</option><option value="14">Ninth · C–D</option></select></label>
@@ -106,9 +106,7 @@ const renderer = new FallingRenderer($('#roll'));
 let transport;
 let score;
 let lookAhead = 8;
-let colorPreference = saved('color-mode', '');
-if (!['hands', 'fingers'].includes(colorPreference)) colorPreference = '';
-let colorMode = colorPreference || 'hands';
+let colorMode = saved('color-mode', 'hands') === 'fingers' ? 'fingers' : 'hands';
 let fingeringKey = '';
 let fingeringOverrides = {};
 let handKey = '';
@@ -245,9 +243,7 @@ function updateView() {
 }
 
 function updateLegend() {
-  if (colorMode === 'fingers') {
-    $('#note-legend').innerHTML = '<span class="legend-title">Fingers</span>' + [1, 2, 3, 4, 5].map(finger => `<span><i style="background:${FINGER_COLORS[theme][finger - 1]}"></i>${finger}</span>`).join('') + `<span><i style="background:${UNMARKED_COLORS[theme]}"></i>Unmarked</span>`;
-  } else $('#note-legend').innerHTML = '<span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span>';
+  $('#note-legend').innerHTML = '<span><i class="left-dot"></i>Left</span><span><i class="right-dot"></i>Right</span>';
   document.querySelectorAll('[data-finger]').forEach(button => {
     const finger = Number(button.dataset.finger);
     if (finger) button.style.setProperty('--finger-color', FINGER_COLORS[theme][finger - 1]);
@@ -373,7 +369,6 @@ async function openScore(input, filename, isDefault = false) {
     if (!handOverrides || Array.isArray(handOverrides) || typeof handOverrides !== 'object') handOverrides = {};
     applyHands(score, handOverrides);
     applyFingerings(score, fingeringOverrides);
-    if (!colorPreference) colorMode = score.notes.some(note => note.fingering) ? 'fingers' : 'hands';
     $('#color-mode').value = colorMode;
     updateReach();
     transport = new Transport(score);
@@ -489,7 +484,7 @@ $('#lookahead').addEventListener('change', event => setLookAhead(event.target.va
 $('#lookahead-range').addEventListener('input', event => setLookAhead(event.target.value));
 $('#keyboard-zoom').addEventListener('input', event => { renderer.setZoom(Number(event.target.value)); updateView(); });
 $('#color-mode').value = colorMode;
-$('#color-mode').addEventListener('change', event => { colorPreference = colorMode = event.target.value; save('color-mode', colorMode); updateLegend(); });
+$('#color-mode').addEventListener('change', event => { colorMode = event.target.value; save('color-mode', colorMode); updateLegend(); });
 $('#reach').value = String(reach);
 if (!$('#reach').value) { reach = 0; $('#reach').value = '0'; }
 $('#reach').addEventListener('change', event => { reach = Number(event.target.value); save('reach', reach); updateReach(); });

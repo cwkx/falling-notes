@@ -97,8 +97,7 @@ test('fits the viewport in both themes and opens settings', async ({ page }, tes
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.getByRole('button', { name: 'Wait for me', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#note-legend')).toBeVisible();
-  await expect(page.locator('#note-legend')).toContainText('Fingers');
-  await expect(page.locator('#note-legend')).toContainText('Unmarked');
+  await expect(page.locator('#note-legend')).toHaveText('LeftRight');
   const dimensions = await page.evaluate(() => {
     const canvas = document.querySelector('#roll').getBoundingClientRect();
     const controls = document.querySelector('.controls').getBoundingClientRect();
@@ -392,7 +391,7 @@ test('imported finger colours can be edited, remembered, and restored', async ({
   await expect(page.locator('#finger-dialog [data-finger="1"]')).toHaveAttribute('aria-pressed', 'true');
   await page.locator('#finger-dialog [data-finger="4"]').click();
   await expect(page.locator('#finger-dialog')).not.toBeVisible();
-  await expect.poll(async () => (await visibleNote(page))?.rgb).not.toEqual(original.rgb);
+  await expect.poll(async () => (await visibleNote(page))?.rgb).toEqual(original.rgb);
   await page.reload();
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
   await importFingerFixture(page);
@@ -413,19 +412,20 @@ test('imported finger colours can be edited, remembered, and restored', async ({
   await expect(page.locator('#finger-dialog [data-finger="1"]')).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('colours follow score annotations until a mode is explicitly chosen', async ({ page }) => {
-  await expect(page.locator('#color-mode')).toHaveValue('fingers');
+test('hand guidance is the default and optional finger badges keep the hand legend', async ({ page }) => {
+  await expect(page.locator('#color-mode')).toHaveValue('hands');
   const unmarked = fingerFixture.replace(/<notations>.*?<\/notations>/g, '');
   await page.locator('#file').setInputFiles({ name: 'unmarked.musicxml', mimeType: 'application/xml', buffer: Buffer.from(unmarked) });
   await expect(page.locator('#piece-title')).toHaveText('Finger practice');
   await expect(page.locator('#color-mode')).toHaveValue('hands');
   await importFingerFixture(page);
-  await expect(page.locator('#color-mode')).toHaveValue('fingers');
+  await expect(page.locator('#color-mode')).toHaveValue('hands');
   await page.getByRole('button', { name: 'Practice settings', exact: true }).click();
-  await page.locator('#color-mode').selectOption('hands');
+  await page.locator('#color-mode').selectOption('fingers');
+  await expect(page.locator('#note-legend')).toHaveText('LeftRight');
   await page.reload();
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
-  await expect(page.locator('#color-mode')).toHaveValue('hands');
+  await expect(page.locator('#color-mode')).toHaveValue('fingers');
   await expect(page.locator('#note-legend')).toHaveText('LeftRight');
 });
 
